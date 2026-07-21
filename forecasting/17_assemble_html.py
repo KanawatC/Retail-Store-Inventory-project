@@ -4,6 +4,8 @@ with open('forecasting/report_fragments_category.json') as f:
     F = json.load(f)
 with open('forecasting/comparison_summary_category.json') as f:
     CMP = json.load(f)
+with open('forecasting/report_fragments_oldforecast.json') as f:
+    OLDF = json.load(f)
 
 categories = sorted(F['small_multiples'].keys())
 small_mult_panels = '\n'.join(f"""
@@ -147,18 +149,18 @@ html = f"""<!-- Challenge 1 (redo): per-category demand forecasting -->
   <section id="verdict">
     <div class="section-head">
       <p class="eyebrow">Direct answer</p>
-      <h2>LSTM still beats ARIMA — and the category split makes the result actionable</h2>
+      <h2>LSTM beats ARIMA — but the CSV's own forecast beats both by ~18&times;</h2>
     </div>
     <div class="callout">
-      Averaged across the 5 categories: <b>LSTM MAE {F['avg_mae']['lstm_mae']:,.0f}</b> vs.
-      <b>ARIMA MAE {F['avg_mae']['arima_mae']:,.0f}</b> ({F['lstm_vs_arima_pct']:+.1f}%) — the global LSTM
-      wins, and by a clearer margin than in the single-series version, because a per-category ARIMA is more
-      exposed to fitting a spurious trend on a single, shorter, noisier series (see Groceries below).
-      Both still land close to the humble historical-mean baseline
-      ({F['lstm_vs_mean_pct']:+.1f}% for LSTM) — the underlying demand-generating process has no real signal
-      to learn beyond a per-category average, as the original hypothesis testing already showed. What's
-      different this time is that the output is now a genuine <b>per-category, per-store stock plan</b>,
-      not one number for the whole chain.
+      Two separate questions, two separate answers. <b>Among the models built in this challenge</b>: LSTM MAE
+      {F['avg_mae']['lstm_mae']:,.0f} vs. ARIMA MAE {F['avg_mae']['arima_mae']:,.0f}
+      ({F['lstm_vs_arima_pct']:+.1f}%) — the global LSTM wins, more clearly than in the single-series version,
+      because a per-category ARIMA is more exposed to fitting a spurious trend on a single, shorter, noisier
+      series (see Groceries below). But <b>neither comes close to the dataset's own pre-existing
+      <code>Demand Forecast</code> column</b>, aggregated to the same grain: {OLDF['avg_mae_raw']:,.0f} MAE raw,
+      {OLDF['avg_mae_corrected']:,.0f} once its known bias is corrected — roughly 18&times; better than the
+      best new model. See "Reality check" below. What the category split does fix is actionability: the
+      output is now a genuine <b>per-category, per-store stock plan</b>, not one number for the whole chain.
     </div>
   </section>
 
@@ -256,6 +258,46 @@ html = f"""<!-- Challenge 1 (redo): per-category demand forecasting -->
     </div>
   </section>
 
+  <section id="old-vs-new">
+    <div class="section-head">
+      <p class="eyebrow">Reality check</p>
+      <h2>Does any new model actually beat the CSV's own forecast column?</h2>
+      <p>Everything above compares the new models to each other. The dataset also ships a pre-existing
+        <code>Demand Forecast</code> column, generated per store-product-day. Summed to the same category-daily
+        grain as everything else here, how does it stack up?</p>
+    </div>
+    <div class="callout" style="margin-bottom:16px">
+      <b>It wins by a wide margin — not a close call.</b> Raw, the existing column's category-daily MAE is
+      {OLDF['avg_mae_raw']:,.0f} units, already 6&times; better than any new model. Correct its one flaw — a
+      consistent over-forecast, estimated from the training period only and applied forward — and its MAE
+      drops to {OLDF['avg_mae_corrected']:,.0f} units ({OLDF['avg_mape_corrected']:.2f}% MAPE, essentially zero
+      residual bias). None of the models built in this challenge come close.
+    </div>
+    <div class="panel panel-wide">
+      <h3>Average MAE across all 5 categories</h3>
+      <p class="panel-sub">Lower is better &middot; existing-forecast bars in green, new models in blue/amber/orange</p>
+      <div class="chart-wrap">{OLDF['chart_old_vs_new']}</div>
+    </div>
+    <div class="panel panel-wide" style="margin-top:16px">
+      <div class="table-wrap">
+        <table class="dq">
+          <tr><th>Category</th><th>Old forecast (raw)</th><th>Old forecast (corrected)</th><th>Mean baseline</th><th>ARIMA</th><th>LSTM</th></tr>
+          {OLDF['per_cat_rows']}
+        </table>
+      </div>
+    </div>
+    <p class="panel-sub" style="margin-top:16px; max-width:72ch">
+      <b>Why the gap is this large:</b> the existing column forecasts at store-product-day granularity —
+      about 20 individual forecasts feed each category-day total. Each of those row-level forecasts already
+      tracks its own actual sale closely (r=0.997, from the original data-quality audit), so their sum tracks
+      the category total closely too. The new models in this challenge never see that row-level detail — they
+      only see the daily category total itself, a series with no autocorrelation and no useful external
+      predictor (Steps 1-2), so they have nothing to work with beyond the historical average. A forecast built
+      from finer-grained, genuinely predictive inputs beats a time-series model applied to a coarser series
+      with no signal in it, regardless of whether that model is ARIMA or an LSTM.
+    </p>
+  </section>
+
   <section id="stock-plan">
     <div class="section-head">
       <p class="eyebrow">The practical output</p>
@@ -323,11 +365,18 @@ html = f"""<!-- Challenge 1 (redo): per-category demand forecasting -->
         Steps 1-2 already showed: none of the dataset's other variables (price, discount, promotion, weather,
         season, weekday) carry usable signal, so a category's own recent average remains the strongest
         available predictor.</span></li>
-      <li><span><b>Recommendation:</b> use the historical-mean-based stock plan above as the operational
-        default (robust, simple, nearly as accurate as either model), keep the global LSTM as the
-        forecasting method of choice if this were extended to more product types or finer time granularity
-        (it scales as one model, not one per series, and is the more robust of the two learned models) —
-        and treat per-category ARIMA with caution on any series with a borderline-significant trend.</span></li>
+      <li><span><b>None of that matters next to the reality check:</b> the CSV's own
+        <code>Demand Forecast</code> column, simply summed to the same grain, beats every model built here —
+        raw ({OLDF['avg_mae_raw']:,.0f} MAE) and especially once its bias is corrected
+        ({OLDF['avg_mae_corrected']:,.0f} MAE, {OLDF['avg_mape_corrected']:.2f}% MAPE). It wins because it's
+        built from ~20 row-level forecasts per category-day that each individually track their own actual
+        sale (r=0.997) — information the daily-aggregate models never see.</span></li>
+      <li><span><b>Recommendation, revised:</b> don't replace the existing forecast column with a new
+        time-series model — <b>correct its bias and ship it.</b> The bias is a fixed, learnable offset
+        (estimate it on a training window, as done here), not something that needs a new model to fix. The
+        mean/ARIMA/LSTM work above is still useful as a fallback for a product or store with no row-level
+        forecast available, and the global LSTM remains the more robust of the two learned methods in that
+        scenario — but it is not the recommended primary forecast when the existing column is available.</span></li>
     </ul>
   </section>
 

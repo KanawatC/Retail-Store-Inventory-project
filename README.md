@@ -110,6 +110,8 @@ forecasting/14_lstm_global.py              1 global multi-series LSTM (category 
 forecasting/15_compare_and_stock_plan.py   consolidated metrics + per-store stock allocation
 forecasting/16_build_report.py             chart generation
 forecasting/17_assemble_html.py            assembles the HTML report
+forecasting/18_existing_forecast_category.py  the CSV's own forecast column vs the new models (reality check)
+forecasting/19_build_oldforecast_report.py    chart generation for the reality-check comparison
 ```
 
 **Step 1 — granularity, corrected.** The original ANOVA (`01_hypothesis_granularity.py`)
@@ -160,7 +162,7 @@ the strongest single estimator across the comparison) split evenly across the
 | Groceries | 2,752 | 550 |
 | Toys | 2,728 | 546 |
 
-### Conclusion
+### Conclusion (models built in this challenge)
 
 **LSTM still beats ARIMA, and by a clearer margin than the first pass**
 (average MAE 619.9 vs. 641.4, +3.4%, up from +3.6% in the single flat-series
@@ -172,9 +174,55 @@ variable in the dataset carries usable signal, so a category's own recent
 average remains the strongest available predictor. The real fix in this redo
 isn't the model — it's the target: forecasting five actionable per-category
 numbers (and a defensible per-store split) instead of one number nobody could
-act on. Recommendation: use the mean-based stock plan above as the day-to-day
-default, and keep the global LSTM as the forecasting method of choice if this
-were extended to more product types — it scales as one model rather than one
-per series, and it's the more robust of the two learned models. Treat
-per-category ARIMA with caution on any series with a borderline-significant
-trend.
+act on.
+
+### Reality check — does either new model beat the CSV's own forecast column?
+
+Everything above compares the new models to each other. The dataset also
+ships a pre-existing `Demand Forecast` column, generated per
+store-product-day (this is the same column audited for bias in the "Data
+analysis" section above). Summed to the same category-daily grain as
+everything else in this challenge (`forecasting/18_existing_forecast_category.py`),
+here's how it stacks up on the identical 90-day test window:
+
+| Category | Old forecast (raw) | Old forecast (bias-corrected) | Mean baseline | ARIMA | LSTM |
+|---|---|---|---|---|---|
+| Clothing | 101 | 35 | 596 | 595 | 666 |
+| Electronics | 103 | 35 | 607 | 606 | 589 |
+| Furniture | 101 | 34 | 618 | 619 | 636 |
+| Groceries | 102 | 30 | 563 | 823 | 627 |
+| Toys | 98 | 33 | 563 | 565 | 581 |
+| **Average MAE** | **101** | **33** | **589** | **641** | **620** |
+
+**It wins, and it isn't close.** Raw, the existing column is already ~6x
+better than any new model. Bias-corrected — subtracting a fixed offset
+estimated from the training period only, then applied forward to the test
+period, no new model required — its MAE drops to 33 units (1.31% MAPE,
+essentially zero residual bias), roughly **18x better than the best new
+model (LSTM)**.
+
+**Why the gap is this large:** the existing column forecasts at
+store-product-day granularity — about 20 individual row-level forecasts feed
+each category-day total. Each of those row-level forecasts already tracks its
+own actual sale closely (r = 0.997, from the original data-quality audit), so
+their sum tracks the category total closely too. The new models in this
+challenge never see that row-level detail — they only see the daily category
+total itself, a series with no autocorrelation and no useful external
+predictor (Steps 1-2), so they have nothing to work with beyond the
+historical average. A forecast built from finer-grained, genuinely predictive
+inputs beats a time-series model applied to a coarser series with no signal
+in it, regardless of whether that model is ARIMA or an LSTM.
+
+### Recommendation, revised
+
+**Don't replace the existing forecast column with a new time-series model —
+correct its bias and ship it.** The bias is a fixed, learnable offset
+(estimate it on a training window, exactly as done here), not something that
+needs a new model to fix. The mean/ARIMA/LSTM work above is still useful as a
+fallback for a product or store with no row-level forecast available, and the
+global LSTM remains the more robust of the two learned methods in that
+scenario — but neither is the recommended primary forecast when the existing,
+finer-grained forecast column is available. Treat per-category ARIMA with
+extra caution regardless — its differenced random-walk pick for Groceries
+(chasing a small real trend that didn't continue into the test period) was
+its single worst result even among the new models.
